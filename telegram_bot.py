@@ -1,11 +1,27 @@
 """
 Telegram-бот «Агент постов Регион 702»
-Требования: pip install python-telegram-bot anthropic
+Версия для БЕСПЛАТНОГО Web Service на Render.
+
+Требования: pip install python-telegram-bot anthropic flask
 Переменные окружения: TELEGRAM_TOKEN, ANTHROPIC_KEY
+
+КАК ЭТО РАБОТАЕТ:
+Render бесплатно даёт только Web Service (засыпает без HTTP-запросов).
+Этот файл запускает Flask-сервер на отдельном потоке — он отвечает "OK"
+на любой пинг и не даёт Render усыпить сервис. Сам бот работает в
+основном потоке как обычно (polling Telegram).
+
+ВАЖНО: чтобы сервис не засыпал, настрой внешний пинг-сервис
+(uptimerobot.com или cron-job.org) — он будет стучаться на твой
+Render URL каждые 10 минут. Без этого бот будет засыпать через
+15 минут бездействия и просыпаться только при следующем сообщении
+(с задержкой 30-60 секунд на "пробуждение").
 """
 
 import os
 import logging
+import threading
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
@@ -17,6 +33,22 @@ logging.basicConfig(level=logging.INFO)
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 ANTHROPIC_KEY = os.environ["ANTHROPIC_KEY"]
+PORT = int(os.environ.get("PORT", 10000))  # Render передаёт PORT автоматически
+
+# ─── Flask keep-alive сервер ─────────────────────────────────────────────────
+
+flask_app = Flask(__name__)
+
+@flask_app.route("/")
+def home():
+    return "Бот Регион 702 работает ✅"
+
+@flask_app.route("/ping")
+def ping():
+    return "pong"
+
+def run_flask():
+    flask_app.run(host="0.0.0.0", port=PORT)
 
 client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
@@ -204,6 +236,12 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── Main ────────────────────────────────────────────────────────────────────
 
 def main():
+    # Запускаем Flask на отдельном потоке — он держит сервис "живым" для Render
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    print(f"Flask keep-alive сервер запущен на порту {PORT}")
+
+    # Бот работает в основном потоке как обычно
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("menu", menu))
